@@ -119,9 +119,8 @@
                 entries.forEach((entry, index) => {
                     const listItem = document.createElement('li');
                     listItem.className = 'bg-gray-50 p-3 rounded-md shadow-sm border border-gray-200 text-gray-700 text-sm';
-                    const fromDate = new Date(entry.fromDate);
-                    const toDate = new Date(entry.toDate);
-                    listItem.textContent = `${index + 1}. ${entry.name}: From ${fromDate.toLocaleDateString()} to ${toDate.toLocaleDateString()}`;
+                    // FIX: Use the stored date strings directly to avoid timezone issues.
+                    listItem.textContent = `${index + 1}. ${entry.name}: From ${entry.fromDate} to ${entry.toDate}`;
                     entriesListEl.appendChild(listItem);
                 });
             });
