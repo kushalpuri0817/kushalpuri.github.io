@@ -11,12 +11,30 @@
             font-family: 'Inter', sans-serif;
             background-color: #f3f4f6;
         }
+        .collapsible-content {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease-in-out;
+        }
+        .collapsible-content.open {
+            max-height: 2000px; /* Adjust as needed for content */
+        }
+        .collapsible-header {
+            cursor: pointer;
+            user-select: none;
+        }
+        .rotate-icon {
+            transition: transform 0.3s ease-in-out;
+        }
+        .rotate-icon.rotated {
+            transform: rotate(90deg);
+        }
     </style>
     <!-- Firebase SDKs -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, addDoc, onSnapshot, query, where, getDocs, deleteDoc, doc, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, collection, addDoc, onSnapshot, query, where, getDocs, deleteDoc, doc, writeBatch, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // Firebase configuration for GitHub Pages deployment
         const githubFirebaseConfig = {
@@ -40,6 +58,11 @@
         let auth;
         let userId = null;
         let entriesCollection;
+        let allEntries = []; // Cache all entries for the user
+        let editingEntryId = null; // Stores the ID of the entry currently being edited
+
+        // Target for the progress bar
+        const TARGET_DAYS = 1035;
 
         // Message and loading elements
         const messageBox = document.getElementById('message-box');
@@ -76,7 +99,8 @@
                     loadingSpinner.style.display = 'none';
                     if (user) {
                         userId = user.uid;
-                        document.getElementById('user-id-display').textContent = `User ID: ${userId}`;
+                        // Hiding the user ID display for a cleaner UI
+                        // document.getElementById('user-id-display').textContent = `User ID: ${userId}`;
                         // Set up the entries collection path
                         entriesCollection = collection(db, 'artifacts', appId, 'users', userId, 'entries');
                         // Show content
@@ -95,35 +119,302 @@
             }
         };
 
-        // Function to listen for real-time updates
-        const setupRealtimeListener = () => {
+        // Function to count total unique days covered by filtered entries
+        const calculateTotalDays = (entries) => {
+            const uniqueDays = new Set();
+            entries.forEach(entry => {
+                const fromDate = new Date(entry.fromDate);
+                const toDate = new Date(entry.toDate);
+                let currentDate = new Date(fromDate);
+                while (currentDate <= toDate) {
+                    uniqueDays.add(currentDate.toISOString().substring(0, 10));
+                    currentDate.setDate(currentDate.getDate() + 1);
+                }
+            });
+            return uniqueDays.size;
+        };
+
+        // Function to render the entries and update the counts
+        const renderEntries = () => {
             const entriesListEl = document.getElementById('entries-list');
-            const totalEntriesEl = document.getElementById('total-entries');
+            const totalDaysEl = document.getElementById('total-days');
+            const remainingDaysEl = document.getElementById('remaining-days');
+            const selectedPerson = document.getElementById('person-name').value;
+            const progressBar = document.getElementById('progress-bar');
+            const progressText = document.getElementById('progress-text');
 
-            onSnapshot(query(entriesCollection), (querySnapshot) => {
-                const entries = [];
-                querySnapshot.forEach((doc) => {
-                    entries.push({ id: doc.id, ...doc.data() });
+            // Filter the cached entries based on the selected person
+            const filteredEntries = allEntries.filter(entry => entry.name === selectedPerson);
+
+            // Sort filtered entries by timestamp to ensure consistent order
+            filteredEntries.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+            // Calculate totals for the selected person
+            const totalDays = calculateTotalDays(filteredEntries);
+            const remainingDays = TARGET_DAYS - totalDays;
+            const progressPercentage = Math.min(100, (totalDays / TARGET_DAYS) * 100);
+
+            // Update the display with filtered data
+            totalDaysEl.textContent = `${totalDays} Days`;
+            remainingDaysEl.textContent = `${remainingDays} Days`;
+
+            // Update the progress bar's color and width
+            let progressBarColorClass = '';
+            if (progressPercentage < 25) {
+                progressBarColorClass = 'bg-red-500';
+            } else if (progressPercentage < 50) {
+                progressBarColorClass = 'bg-yellow-500';
+            } else if (progressPercentage < 75) {
+                progressBarColorClass = 'bg-green-500';
+            } else if (progressPercentage < 100) {
+                progressBarColorClass = 'bg-blue-500';
+            } else {
+                progressBarColorClass = 'bg-indigo-600';
+            }
+            
+            progressBar.style.width = `${progressPercentage}%`;
+            // Set the class of the progress bar based on the calculated color
+            progressBar.className = `h-2.5 rounded-full transition-all duration-500 ease-in-out ${progressBarColorClass}`;
+            
+            // Update the progress text
+            progressText.textContent = `${totalDays}/${TARGET_DAYS} Days (${progressPercentage.toFixed(1)}%)`;
+
+            // Clear the existing list before re-rendering
+            entriesListEl.innerHTML = '';
+
+            // Group entries by year and month
+            const entriesByYearMonth = filteredEntries.reduce((acc, entry) => {
+                // Manually parse the date string to avoid timezone issues
+                const parts = entry.fromDate.split('-');
+                // Create a new Date object using local time components
+                // Note: Month is 0-indexed in JS Date object (e.g., 7 for August)
+                const localDate = new Date(parts[0], parts[1] - 1, parts[2]);
+                
+                const year = localDate.getFullYear();
+                const month = localDate.toLocaleString('default', { month: 'long' });
+
+                if (!acc[year]) acc[year] = {};
+                if (!acc[year][month]) acc[year][month] = [];
+                
+                acc[year][month].push(entry);
+                return acc;
+            }, {});
+
+            // Render collapsible sections for each year and month
+            const sortedYears = Object.keys(entriesByYearMonth).sort((a, b) => b - a);
+            sortedYears.forEach(year => {
+                const yearHeader = document.createElement('div');
+                yearHeader.className = 'collapsible-header flex items-center justify-between bg-gray-200 p-3 rounded-md shadow-sm mb-2 mt-4';
+                yearHeader.innerHTML = `
+                    <div class="flex items-center">
+                        <svg class="h-4 w-4 text-gray-600 mr-2 rotate-icon" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10l-3.293-3.293a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd"></path>
+                        </svg>
+                        <span class="font-semibold text-gray-800">${year}</span>
+                    </div>
+                    <span class="text-sm text-gray-600">${Object.keys(entriesByYearMonth[year]).length} months, ${filteredEntries.filter(e => new Date(e.fromDate).getFullYear() == year).length} entries</span>
+                `;
+                entriesListEl.appendChild(yearHeader);
+
+                const yearContent = document.createElement('ul');
+                yearContent.className = 'collapsible-content space-y-2 pl-4 border-l-2 border-gray-200';
+                entriesListEl.appendChild(yearContent);
+
+                const sortedMonths = Object.keys(entriesByYearMonth[year]);
+                sortedMonths.forEach(month => {
+                    const monthHeader = document.createElement('div');
+                    monthHeader.className = 'collapsible-header flex items-center justify-between bg-gray-100 p-3 rounded-md shadow-sm mb-2 mt-2 ml-2';
+                    monthHeader.innerHTML = `
+                        <div class="flex items-center">
+                            <svg class="h-4 w-4 text-gray-500 mr-2 rotate-icon" fill="currentColor" viewBox="0 0 20 20">
+                                <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10l-3.293-3.293a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd"></path>
+                            </svg>
+                            <span class="font-medium text-gray-700">${month}</span>
+                        </div>
+                        <span class="text-xs text-gray-500">${entriesByYearMonth[year][month].length} entries</span>
+                    `;
+                    yearContent.appendChild(monthHeader);
+
+                    const monthContent = document.createElement('ul');
+                    monthContent.className = 'collapsible-content space-y-2 pl-4 border-l-2 border-gray-100';
+                    yearContent.appendChild(monthContent);
+
+                    entriesByYearMonth[year][month].forEach((entry, index) => {
+                        const listItem = document.createElement('li');
+                        listItem.className = 'bg-white p-3 rounded-md shadow-sm border border-gray-200 text-gray-700 text-sm flex justify-between items-center';
+                        
+                        const textSpan = document.createElement('span');
+                        textSpan.textContent = `From ${entry.fromDate} to ${entry.toDate}`;
+                        
+                        const buttonContainer = document.createElement('div');
+                        buttonContainer.className = 'flex items-center space-x-2 ml-2';
+
+                        const editButton = document.createElement('button');
+                        editButton.className = 'text-indigo-600 hover:text-indigo-800 transition duration-150 ease-in-out';
+                        editButton.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                                    <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zm-4.646 4.646l-2.828 2.828-4.899 4.899A1 1 0 011.586 16H3a1 1 0 011-1h1l4.899-4.899z" />
+                                                </svg>`;
+                        editButton.title = `Edit entry for ${entry.name}`;
+                        editButton.onclick = () => enableEditMode(entry);
+
+                        const deleteButton = document.createElement('button');
+                        deleteButton.className = 'text-red-600 hover:text-red-800 transition duration-150 ease-in-out';
+                        deleteButton.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                                    <path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd" />
+                                                  </svg>`;
+                        deleteButton.title = `Delete entry for ${entry.name}`;
+                        deleteButton.onclick = () => showDeleteConfirm(entry.id, entry.name);
+                        
+                        buttonContainer.appendChild(editButton);
+                        buttonContainer.appendChild(deleteButton);
+
+                        listItem.appendChild(textSpan);
+                        listItem.appendChild(buttonContainer);
+                        monthContent.appendChild(listItem);
+                    });
+                    monthHeader.addEventListener('click', () => {
+                        monthContent.classList.toggle('open');
+                        monthHeader.querySelector('.rotate-icon').classList.toggle('rotated');
+                    });
                 });
-
-                // Sort entries by timestamp to ensure consistent order
-                entries.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-                // Update the total count at the top
-                totalEntriesEl.textContent = `Total Entries: ${entries.length}`;
-
-                // Clear the existing list before re-rendering
-                entriesListEl.innerHTML = '';
-
-                // Create a list item for each entry
-                entries.forEach((entry, index) => {
-                    const listItem = document.createElement('li');
-                    listItem.className = 'bg-gray-50 p-3 rounded-md shadow-sm border border-gray-200 text-gray-700 text-sm';
-                    // FIX: Use the stored date strings directly to avoid timezone issues.
-                    listItem.textContent = `${index + 1}. ${entry.name}: From ${entry.fromDate} to ${entry.toDate}`;
-                    entriesListEl.appendChild(listItem);
+                yearHeader.addEventListener('click', () => {
+                    yearContent.classList.toggle('open');
+                    yearHeader.querySelector('.rotate-icon').classList.toggle('rotated');
                 });
             });
+        };
+        
+        // Function to put the form in edit mode
+        const enableEditMode = (entry) => {
+            editingEntryId = entry.id;
+            document.getElementById('from-date').value = entry.fromDate;
+            document.getElementById('to-date').value = entry.toDate;
+            document.getElementById('person-name').value = entry.name;
+            document.getElementById('person-name').disabled = true; // Prevent changing person while editing
+            document.getElementById('submit-button').textContent = 'Update Entry';
+            document.getElementById('cancel-edit-button').style.display = 'inline-block';
+            showMessage('Editing an existing entry. Update the dates and click "Update Entry" to save.', 'info');
+        };
+
+        // Function to reset the form to add new entry mode
+        const disableEditMode = () => {
+            editingEntryId = null;
+            document.getElementById('from-date').value = '';
+            document.getElementById('to-date').value = '';
+            document.getElementById('person-name').disabled = false;
+            document.getElementById('submit-button').textContent = 'Add Entry';
+            document.getElementById('cancel-edit-button').style.display = 'none';
+            showMessage('Ready to add a new entry.', 'info');
+        };
+
+        // Function to show the delete confirmation modal
+        const showDeleteConfirm = (entryId, entryName) => {
+            const deleteConfirmModal = document.getElementById('delete-confirm-modal');
+            const deleteMessage = document.getElementById('delete-message');
+            
+            deleteMessage.textContent = `Are you sure you want to delete this entry for ${entryName}?`;
+            deleteConfirmModal.style.display = 'block';
+
+            document.getElementById('delete-yes').onclick = async () => {
+                deleteConfirmModal.style.display = 'none';
+                try {
+                    await deleteDoc(doc(entriesCollection, entryId));
+                    showMessage('Entry deleted successfully!');
+                } catch (e) {
+                    console.error("Error deleting document: ", e);
+                    showMessage('Error deleting entry. Please try again.', 'error');
+                }
+            };
+
+            document.getElementById('delete-no').onclick = () => {
+                deleteConfirmModal.style.display = 'none';
+            };
+        };
+
+        // Function to listen for real-time updates
+        const setupRealtimeListener = () => {
+            onSnapshot(query(entriesCollection), (querySnapshot) => {
+                // Update the cached list of all entries whenever the database changes
+                allEntries = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                // Re-render the display based on the selected person
+                renderEntries();
+            });
+        };
+
+        // New function for voice input
+        const startVoiceInput = (inputElementId) => {
+            if (!('webkitSpeechRecognition' in window)) {
+                showMessage('Speech recognition is not supported in this browser.', 'error');
+                return;
+            }
+
+            const recognition = new webkitSpeechRecognition();
+            recognition.continuous = false;
+            recognition.interimResults = false;
+            recognition.lang = 'en-US';
+
+            const inputElement = document.getElementById(inputElementId);
+            showMessage('Listening for date...', 'info');
+
+            recognition.onresult = async (event) => {
+                const transcript = event.results[0][0].transcript;
+                showMessage(`Heard: "${transcript}". Processing...`, 'info');
+                
+                try {
+                    const parsedDate = await parseDateWithGemini(transcript);
+                    if (parsedDate) {
+                        inputElement.value = parsedDate;
+                        showMessage('Date filled successfully!', 'info');
+                    } else {
+                        showMessage('Could not understand the date. Please try again.', 'error');
+                    }
+                } catch (e) {
+                    console.error('Error parsing date:', e);
+                    showMessage('An error occurred during date processing. Please try again.', 'error');
+                }
+            };
+
+            recognition.onerror = (event) => {
+                console.error('Speech recognition error:', event.error);
+                showMessage(`Speech recognition error: ${event.error}`, 'error');
+            };
+
+            recognition.onend = () => {
+                console.log('Speech recognition ended.');
+            };
+
+            recognition.start();
+        };
+
+        // Function to use the Gemini API to parse natural language dates
+        const parseDateWithGemini = async (text) => {
+            const prompt = `Convert the following natural language date or phrase into YYYY-MM-DD format. If the phrase is "today", return today's date. If a specific date is not found, return the string "null". The current date is ${new Date().toISOString().substring(0, 10)}. Examples: "January 15th, 2023" -> "2023-01-15", "the day after tomorrow" -> "2025-08-18", "today" -> "2025-08-16".\n\nDate to parse: "${text}"`;
+            
+            let chatHistory = [];
+            chatHistory.push({ role: "user", parts: [{ text: prompt }] });
+            const payload = { contents: chatHistory };
+            const apiKey = ""
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+
+            try {
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const result = await response.json();
+                
+                const parsedDate = result?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+
+                // Simple validation to ensure it's a valid date string
+                if (parsedDate && parsedDate !== 'null' && parsedDate.match(/^\d{4}-\d{2}-\d{2}$/)) {
+                    return parsedDate;
+                }
+                return null;
+            } catch (error) {
+                console.error('API call failed:', error);
+                return null;
+            }
         };
 
         document.addEventListener('DOMContentLoaded', () => {
@@ -131,6 +422,18 @@
 
             const form = document.getElementById('entry-form');
             const clearButton = document.getElementById('clear-button');
+            const personSelect = document.getElementById('person-name');
+            const cancelButton = document.getElementById('cancel-edit-button');
+            const fromDateVoiceButton = document.getElementById('from-date-voice-btn');
+            const toDateVoiceButton = document.getElementById('to-date-voice-btn');
+
+            // Add event listeners for the new voice input buttons
+            fromDateVoiceButton.addEventListener('click', () => startVoiceInput('from-date'));
+            toDateVoiceButton.addEventListener('click', () => startVoiceInput('to-date'));
+
+            // Listen for changes on the person name dropdown to re-render the view
+            personSelect.addEventListener('change', renderEntries);
+            cancelButton.addEventListener('click', disableEditMode);
 
             // Handle form submission
             form.addEventListener('submit', async (event) => {
@@ -145,40 +448,128 @@
                     return;
                 }
 
-                const newEntry = {
-                    name: personName,
-                    fromDate: fromDate,
-                    toDate: toDate,
-                    timestamp: new Date().toISOString()
-                };
+                // New validations: From date less than To date
+                const fromDateObj = new Date(fromDate);
+                const toDateObj = new Date(toDate);
+                if (fromDateObj > toDateObj) {
+                    showMessage('The "From" date cannot be after the "To" date.', 'error');
+                    return;
+                }
 
-                try {
-                    // Check for duplicate entry before adding
-                    const q = query(entriesCollection,
-                        where("name", "==", newEntry.name),
-                        where("fromDate", "==", newEntry.fromDate),
-                        where("toDate", "==", newEntry.toDate)
-                    );
-                    const querySnapshot = await getDocs(q);
+                // New validation: No future dates allowed
+                const today = new Date();
+                today.setHours(0, 0, 0, 0); // Normalize to the start of the day
+                if (fromDateObj > today || toDateObj > today) {
+                    showMessage('Future dates are not allowed.', 'error');
+                    return;
+                }
 
-                    if (!querySnapshot.empty) {
-                        // A duplicate exists, show an error and return
-                        showMessage('This entry already exists.', 'error');
-                        return;
+                // Check for duplicate or overlapping entry before adding/updating
+                const entriesForSelectedPerson = allEntries.filter(entry => entry.name === personName);
+                const newEntryFromDate = new Date(fromDate);
+                const newEntryToDate = new Date(toDate);
+
+                for (const entry of entriesForSelectedPerson) {
+                    // Skip the entry being edited when checking for overlaps and duplicates
+                    if (editingEntryId && entry.id === editingEntryId) {
+                        continue;
                     }
 
-                    // No duplicate found, proceed to add the new entry
-                    await addDoc(entriesCollection, newEntry);
-                    showMessage('Entry added successfully!');
+                    const existingFromDate = new Date(entry.fromDate);
+                    const existingToDate = new Date(entry.toDate);
 
+                    // Check for overlap
+                    const isOverlap = (newEntryFromDate <= existingToDate && newEntryToDate >= existingFromDate);
+                    
+                    // Check for exact duplicate
+                    const isDuplicate = (entry.name === personName && entry.fromDate === fromDate && entry.toDate === toDate);
+
+                    if (isDuplicate) {
+                        showMessage('This exact entry already exists for this person.', 'error');
+                        return;
+                    }
+                    
+                    if (isOverlap) {
+                        showMessage('This date range overlaps with an existing entry for this person.', 'error');
+                        return;
+                    }
+                }
+
+                // Proceed with adding or updating the entry
+                if (editingEntryId) {
+                    try {
+                        // First, delete the old entry
+                        const oldEntryRef = doc(db, entriesCollection.path, editingEntryId);
+                        await deleteDoc(oldEntryRef);
+                        
+                        // Then, add the new entry(s)
+                        await addSplitEntries(personName, fromDate, toDate);
+
+                        showMessage('Entry updated successfully!');
+                        disableEditMode(); // Reset form after successful update
+                    } catch (e) {
+                        console.error("Error updating document: ", e);
+                        showMessage('Error updating entry. Please try again.', 'error');
+                    }
+                } else {
+                    // Add new entry
+                    await addSplitEntries(personName, fromDate, toDate);
+                }
+            });
+
+            // Function to handle adding entries, with logic to split ranges across months
+            const addSplitEntries = async (personName, fromDate, toDate) => {
+                const start = new Date(fromDate);
+                const end = new Date(toDate);
+
+                try {
+                    // Check if the range spans multiple months
+                    if (start.getMonth() !== end.getMonth() || start.getFullYear() !== end.getFullYear()) {
+                        // It spans multiple months, so we need to split it
+                        const firstMonthEnd = new Date(start.getFullYear(), start.getMonth() + 1, 0);
+                        const secondMonthStart = new Date(end.getFullYear(), end.getMonth(), 1);
+                        
+                        // Create first entry for the first month
+                        const firstEntry = {
+                            name: personName,
+                            fromDate: fromDate,
+                            toDate: firstMonthEnd.toISOString().substring(0, 10),
+                            timestamp: new Date().toISOString()
+                        };
+                        await addDoc(entriesCollection, firstEntry);
+
+                        // Create second entry for the second month
+                        const secondEntry = {
+                            name: personName,
+                            fromDate: secondMonthStart.toISOString().substring(0, 10),
+                            toDate: toDate,
+                            timestamp: new Date().toISOString()
+                        };
+                        await addDoc(entriesCollection, secondEntry);
+                        
+                        showMessage('Entry added and split across months successfully!');
+
+                    } else {
+                        // It's all in one month, add a single entry
+                        const newEntry = {
+                            name: personName,
+                            fromDate: fromDate,
+                            toDate: toDate,
+                            timestamp: new Date().toISOString()
+                        };
+                        await addDoc(entriesCollection, newEntry);
+                        showMessage('Entry added successfully!');
+                    }
                     // Reset the date inputs
                     document.getElementById('from-date').value = '';
                     document.getElementById('to-date').value = '';
+
                 } catch (e) {
-                    console.error("Error adding document or checking for duplicates: ", e);
+                    console.error("Error adding document: ", e);
                     showMessage('Error adding entry. Please try again.', 'error');
                 }
-            });
+            };
+
 
             // Handle the clear button click
             clearButton.addEventListener('click', async () => {
@@ -219,7 +610,7 @@
 
         <!-- User ID and loading indicator -->
         <div class="mb-4 text-center">
-            <p id="user-id-display" class="text-sm text-gray-500"></p>
+            <p id="user-id-display" class="text-sm text-gray-500 hidden"></p>
         </div>
         <div id="loading-spinner" class="text-center" style="display:none;">
             <div class="animate-spin inline-block w-8 h-8 border-4 border-indigo-500 border-dotted rounded-full"></div>
@@ -240,14 +631,46 @@
             </div>
         </div>
 
+        <!-- Delete Confirmation Modal -->
+        <div id="delete-confirm-modal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full" style="display:none;">
+            <div class="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+                <h3 class="text-lg leading-6 font-medium text-gray-900">Confirm Deletion</h3>
+                <div class="mt-2 px-7 py-3">
+                    <p id="delete-message" class="text-sm text-gray-500"></p>
+                </div>
+                <div class="mt-4 flex justify-end space-x-2">
+                    <button id="delete-yes" class="px-4 py-2 bg-red-600 text-white text-base font-medium rounded-md shadow-sm hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500">Yes, Delete</button>
+                    <button id="delete-no" class="px-4 py-2 bg-gray-200 text-gray-800 text-base font-medium rounded-md shadow-sm hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-400">Cancel</button>
+                </div>
+            </div>
+        </div>
+
         <!-- Message Box -->
         <div id="message-box" style="display: none;"></div>
 
         <!-- Main Content (hidden until login) -->
         <div id="content-container" style="display:none;">
-            <!-- Display total entries at the top -->
-            <div class="mb-6 text-center">
-                <h2 id="total-entries" class="text-2xl sm:text-3xl font-semibold text-indigo-600">Total Entries: 0</h2>
+            <!-- Progress Bar Section -->
+            <div class="mb-6">
+                <div class="flex justify-between items-center mb-1">
+                    <span id="progress-text" class="text-sm font-medium text-indigo-600">0/1035 Days (0.0%)</span>
+                    <span class="text-xs text-gray-500">Target: May 1, 2027</span>
+                </div>
+                <div class="w-full bg-gray-200 rounded-full h-2.5">
+                    <div id="progress-bar" class="h-2.5 rounded-full transition-all duration-500 ease-in-out" style="width: 0%;"></div>
+                </div>
+            </div>
+
+            <!-- Total days and remaining days at the top -->
+            <div class="mb-6 flex justify-around">
+                <div class="text-center">
+                    <h2 id="total-days" class="text-3xl font-semibold text-indigo-600">0 Days</h2>
+                    <p class="text-sm text-gray-500">Total Days Covered</p>
+                </div>
+                <div class="text-center">
+                    <h2 id="remaining-days" class="text-3xl font-semibold text-gray-700">0 Days</h2>
+                    <p class="text-sm text-gray-500">Remaining Days</p>
+                </div>
             </div>
 
             <!-- Entry Form -->
@@ -263,22 +686,41 @@
                     </select>
                 </div>
 
-                <!-- Date inputs -->
+                <!-- Date inputs with voice buttons -->
                 <div class="flex flex-col sm:flex-row space-y-4 sm:space-y-0 sm:space-x-4">
                     <div class="flex-1">
                         <label for="from-date" class="block text-sm font-medium text-gray-700">From Date</label>
-                        <input type="date" id="from-date" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+                        <div class="flex items-center mt-1">
+                            <input type="date" id="from-date" class="block w-full rounded-l-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+                            <button type="button" id="from-date-voice-btn" title="Speak date" class="p-2 bg-gray-200 rounded-r-md text-gray-600 hover:bg-gray-300 transition duration-150 ease-in-out">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fill-rule="evenodd" d="M7 4a3 3 0 016 0v4a3 3 0 11-6 0V4zm3 8a5 5 0 00-5 5h10a5 5 0 00-5-5z" clip-rule="evenodd" />
+                                </svg>
+                            </button>
+                        </div>
                     </div>
                     <div class="flex-1">
                         <label for="to-date" class="block text-sm font-medium text-gray-700">To Date</label>
-                        <input type="date" id="to-date" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+                        <div class="flex items-center mt-1">
+                            <input type="date" id="to-date" class="block w-full rounded-l-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+                            <button type="button" id="to-date-voice-btn" title="Speak date" class="p-2 bg-gray-200 rounded-r-md text-gray-600 hover:bg-gray-300 transition duration-150 ease-in-out">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fill-rule="evenodd" d="M7 4a3 3 0 016 0v4a3 3 0 11-6 0V4zm3 8a5 5 0 00-5 5h10a5 5 0 00-5-5z" clip-rule="evenodd" />
+                                </svg>
+                            </button>
+                        </div>
                     </div>
                 </div>
 
-                <!-- Submit button -->
-                <button type="submit" class="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition duration-150 ease-in-out">
-                    Add Entry
-                </button>
+                <!-- Submit and Cancel buttons -->
+                <div class="flex space-x-2">
+                    <button type="submit" id="submit-button" class="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition duration-150 ease-in-out">
+                        Add Entry
+                    </button>
+                    <button type="button" id="cancel-edit-button" class="w-1/2 flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-gray-700 bg-gray-200 hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-400 transition duration-150 ease-in-out" style="display:none;">
+                        Cancel Edit
+                    </button>
+                </div>
             </form>
 
             <!-- Container for the list of entries -->
@@ -293,6 +735,7 @@
             <div class="mt-6 text-center">
                 <button id="clear-button" class="text-sm text-red-600 hover:text-red-800 transition duration-150 ease-in-out">Clear All Entries</button>
             </div>
+            
         </div>
     </div>
 </body>
