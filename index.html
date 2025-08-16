@@ -33,8 +33,8 @@
     <!-- Firebase SDKs -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, addDoc, onSnapshot, query, getDocs, deleteDoc, doc, writeBatch, setDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, onSnapshot, query, writeBatch, doc, deleteDoc, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // Firebase configuration for GitHub Pages deployment
         const githubFirebaseConfig = {
@@ -50,13 +50,11 @@
 
         // Check if Gemini environment variables exist and use them, otherwise use the hard-coded config
         const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : githubFirebaseConfig;
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
         const appId = typeof __app_id !== 'undefined' ? __app_id : githubAppId;
 
         // Global variables for Firebase
         let db;
         let auth;
-        let userId = null;
         let entriesCollection;
         let allEntries = []; // Cache all entries for the user
         let editingEntryId = null; // Stores the ID of the entry currently being edited
@@ -89,22 +87,15 @@
                 auth = getAuth(app);
                 db = getFirestore(app);
                 
-                // Use custom token sign-in if available, otherwise anonymous sign-in
-                if (initialAuthToken) {
-                    await signInWithCustomToken(auth, initialAuthToken);
-                } else {
-                    await signInAnonymously(auth);
-                }
+                // Use anonymous sign-in to get a user ID for Firestore security rules
+                await signInAnonymously(auth);
 
                 // Listen for auth state changes
                 onAuthStateChanged(auth, (user) => {
                     loadingSpinner.style.display = 'none';
                     if (user) {
-                        userId = user.uid;
-                        // Hiding the user ID display for a cleaner UI
-                        // document.getElementById('user-id-display').textContent = `User ID: ${userId}`;
-                        // Set up the entries collection path
-                        entriesCollection = collection(db, 'artifacts', appId, 'users', userId, 'entries');
+                        // Set up the public entries collection path
+                        entriesCollection = collection(db, 'artifacts', appId, 'public', 'data', 'entries');
                         // Show content
                         contentContainer.style.display = 'block';
                         // Start listening for real-time data
@@ -563,7 +554,7 @@
                     console.log(`Adding entry chunk: From ${newEntryData.fromDate} to ${newEntryData.toDate}`);
 
                     // Add the entry to the batch
-                    const newDocRef = doc(collection(db, 'artifacts', appId, 'users', userId, 'entries'));
+                    const newDocRef = doc(entriesCollection);
                     batch.set(newDocRef, newEntryData);
 
                     // Move to the first day of the next month
