@@ -1,1 +1,264 @@
-Kushal Puri : Welcome to your Portfolio Page
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Entry Tracker</title>
+    <!-- Use Tailwind CSS for a clean, responsive design -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+        }
+    </style>
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, onSnapshot, query, getDocs, deleteDoc, doc, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Global variables for Firebase
+        let db;
+        let auth;
+        let userId = null;
+        let entriesCollection;
+
+        // Message and loading elements
+        const messageBox = document.getElementById('message-box');
+        const loadingSpinner = document.getElementById('loading-spinner');
+
+        // Show a message to the user
+        const showMessage = (message, type = 'info') => {
+            messageBox.textContent = message;
+            messageBox.className = `p-3 rounded-lg text-white mb-4 ${type === 'error' ? 'bg-red-500' : 'bg-green-500'}`;
+            messageBox.style.display = 'block';
+            setTimeout(() => {
+                messageBox.style.display = 'none';
+            }, 3000);
+        };
+
+        // Initialize Firebase
+        const initFirebase = async () => {
+            try {
+                loadingSpinner.style.display = 'block';
+                const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+                const firebaseConfig = JSON.parse(__firebase_config);
+
+                const app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+
+                // Authenticate the user
+                if (typeof __initial_auth_token !== 'undefined') {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+
+                // Listen for auth state changes
+                onAuthStateChanged(auth, (user) => {
+                    if (user) {
+                        userId = user.uid;
+                        document.getElementById('user-id-display').textContent = `User ID: ${userId}`;
+                        // Set up the entries collection path
+                        entriesCollection = collection(db, 'artifacts', appId, 'users', userId, 'entries');
+                        // Start listening for real-time data
+                        setupRealtimeListener();
+                    } else {
+                        // User is signed out, handle as needed
+                    }
+                    loadingSpinner.style.display = 'none';
+                });
+            } catch (error) {
+                console.error("Firebase initialization or authentication failed:", error);
+                showMessage('Failed to connect to the database. Please try again.', 'error');
+                loadingSpinner.style.display = 'none';
+            }
+        };
+
+        // Function to listen for real-time updates
+        const setupRealtimeListener = () => {
+            const entriesListEl = document.getElementById('entries-list');
+            const totalEntriesEl = document.getElementById('total-entries');
+
+            onSnapshot(query(entriesCollection), (querySnapshot) => {
+                const entries = [];
+                querySnapshot.forEach((doc) => {
+                    entries.push({ id: doc.id, ...doc.data() });
+                });
+
+                // Sort entries by timestamp to ensure consistent order
+                entries.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+                // Update the total count at the top
+                totalEntriesEl.textContent = `Total Entries: ${entries.length}`;
+
+                // Clear the existing list before re-rendering
+                entriesListEl.innerHTML = '';
+
+                // Create a list item for each entry
+                entries.forEach((entry, index) => {
+                    const listItem = document.createElement('li');
+                    listItem.className = 'bg-gray-50 p-3 rounded-md shadow-sm border border-gray-200 text-gray-700 text-sm';
+                    const fromDate = new Date(entry.fromDate);
+                    const toDate = new Date(entry.toDate);
+                    listItem.textContent = `${index + 1}. ${entry.name}: From ${fromDate.toLocaleDateString()} to ${toDate.toLocaleDateString()}`;
+                    entriesListEl.appendChild(listItem);
+                });
+            });
+        };
+
+        document.addEventListener('DOMContentLoaded', () => {
+            initFirebase();
+
+            const form = document.getElementById('entry-form');
+            const clearButton = document.getElementById('clear-button');
+
+            // Handle form submission
+            form.addEventListener('submit', async (event) => {
+                event.preventDefault();
+
+                const personName = document.getElementById('person-name').value;
+                const fromDate = document.getElementById('from-date').value;
+                const toDate = document.getElementById('to-date').value;
+
+                if (!fromDate || !toDate) {
+                    showMessage('Please select both a "From" and "To" date.', 'error');
+                    return;
+                }
+
+                const newEntry = {
+                    name: personName,
+                    fromDate: fromDate,
+                    toDate: toDate,
+                    timestamp: new Date().toISOString()
+                };
+
+                try {
+                    await addDoc(entriesCollection, newEntry);
+                    showMessage('Entry added successfully!');
+
+                    // Reset the date inputs
+                    document.getElementById('from-date').value = '';
+                    document.getElementById('to-date').value = '';
+                } catch (e) {
+                    console.error("Error adding document: ", e);
+                    showMessage('Error adding entry. Please try again.', 'error');
+                }
+            });
+
+            // Handle the clear button click
+            clearButton.addEventListener('click', async () => {
+                const entriesList = await getDocs(entriesCollection);
+                if (entriesList.empty) {
+                    showMessage('No entries to clear.', 'info');
+                    return;
+                }
+
+                const confirmModal = document.getElementById('confirm-modal');
+                confirmModal.style.display = 'block';
+
+                document.getElementById('confirm-yes').onclick = async () => {
+                    confirmModal.style.display = 'none';
+                    try {
+                        const batch = writeBatch(db);
+                        entriesList.forEach((doc) => {
+                            batch.delete(doc.ref);
+                        });
+                        await batch.commit();
+                        showMessage('All entries cleared successfully!');
+                    } catch (e) {
+                        console.error("Error clearing documents: ", e);
+                        showMessage('Error clearing entries. Please try again.', 'error');
+                    }
+                };
+
+                document.getElementById('confirm-no').onclick = () => {
+                    confirmModal.style.display = 'none';
+                };
+            });
+        });
+    </script>
+</head>
+<body class="bg-gray-100 p-4 sm:p-8 flex items-center justify-center min-h-screen">
+    <div class="bg-white p-6 sm:p-8 rounded-2xl shadow-xl w-full max-w-xl">
+        <h1 class="text-3xl sm:text-4xl font-bold text-center text-gray-800 mb-6">Entry Tracker</h1>
+
+        <!-- User ID and loading indicator -->
+        <div class="mb-4 text-center">
+            <p id="user-id-display" class="text-sm text-gray-500"></p>
+        </div>
+        <div id="loading-spinner" class="text-center" style="display:none;">
+            <div class="animate-spin inline-block w-8 h-8 border-4 border-indigo-500 border-dotted rounded-full"></div>
+            <p class="text-gray-500 mt-2">Connecting to database...</p>
+        </div>
+        
+        <!-- Confirmation Modal -->
+        <div id="confirm-modal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full" style="display:none;">
+            <div class="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+                <h3 class="text-lg leading-6 font-medium text-gray-900">Confirm Action</h3>
+                <div class="mt-2 px-7 py-3">
+                    <p class="text-sm text-gray-500">Are you sure you want to clear all entries? This action cannot be undone.</p>
+                </div>
+                <div class="mt-4 flex justify-end space-x-2">
+                    <button id="confirm-yes" class="px-4 py-2 bg-red-600 text-white text-base font-medium rounded-md shadow-sm hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500">Yes</button>
+                    <button id="confirm-no" class="px-4 py-2 bg-gray-200 text-gray-800 text-base font-medium rounded-md shadow-sm hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-400">No</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Message Box -->
+        <div id="message-box" style="display: none;"></div>
+
+        <!-- Display total entries at the top -->
+        <div class="mb-6 text-center">
+            <h2 id="total-entries" class="text-2xl sm:text-3xl font-semibold text-indigo-600">Total Entries: 0</h2>
+        </div>
+
+        <!-- Entry Form -->
+        <form id="entry-form" class="space-y-4">
+            <!-- Name selection input -->
+            <div>
+                <label for="person-name" class="block text-sm font-medium text-gray-700">Select a Person</label>
+                <select id="person-name" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 rounded-md shadow-sm">
+                    <option value="John">John</option>
+                    <option value="Jane">Jane</option>
+                    <option value="Doe">Doe</option>
+                    <option value="Sarah">Sarah</option>
+                </select>
+            </div>
+
+            <!-- Date inputs -->
+            <div class="flex flex-col sm:flex-row space-y-4 sm:space-y-0 sm:space-x-4">
+                <div class="flex-1">
+                    <label for="from-date" class="block text-sm font-medium text-gray-700">From Date</label>
+                    <input type="date" id="from-date" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+                </div>
+                <div class="flex-1">
+                    <label for="to-date" class="block text-sm font-medium text-gray-700">To Date</label>
+                    <input type="date" id="to-date" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+                </div>
+            </div>
+
+            <!-- Submit button -->
+            <button type="submit" class="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition duration-150 ease-in-out">
+                Add Entry
+            </button>
+        </form>
+
+        <!-- Container for the list of entries -->
+        <div id="entries-list-container" class="mt-8">
+            <h3 class="text-lg font-semibold text-gray-800 mb-4">Past Entries</h3>
+            <ul id="entries-list" class="space-y-2">
+                <!-- Entries will be dynamically added here -->
+            </ul>
+        </div>
+
+        <!-- Clear all entries button -->
+        <div class="mt-6 text-center">
+            <button id="clear-button" class="text-sm text-red-600 hover:text-red-800 transition duration-150 ease-in-out">Clear All Entries</button>
+        </div>
+    </div>
+</body>
+</html>
