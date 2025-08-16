@@ -18,16 +18,17 @@
         import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, addDoc, onSnapshot, query, getDocs, deleteDoc, doc, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // IMPORTANT: Replace these with your own Firebase project credentials
+        // Use the Firebase configuration provided by the user
         const firebaseConfig = {
-          apiKey: "AIzaSyBN8xYYQ2d90po7W-3IizsR6WFf6tn5StM",
-          authDomain: "canada-tracker.firebaseapp.com",
-          projectId: "canada-tracker",
-          storageBucket: "canada-tracker.firebasestorage.app",
-          messagingSenderId: "898976695894",
-          appId: "1:898976695894:web:ad95d2dbc2536377f75df7",
-          measurementId: "G-VYB5RWRNJE"
+            apiKey: "AIzaSyBN8xYYQ2d90po7W-3IizsR6WFf6tn5StM",
+            authDomain: "canada-tracker.firebaseapp.com",
+            projectId: "canada-tracker",
+            storageBucket: "canada-tracker.firebasestorage.app",
+            messagingSenderId: "898976695894",
+            appId: "1:898976695894:web:ad95d2dbc2536377f75df7",
+            measurementId: "G-VYB5RWRNJE"
         };
+        const appId = "canada-tracker"; // Use the projectId as the app id for the path
 
         // Global variables for Firebase
         let db;
@@ -58,7 +59,7 @@
                 auth = getAuth(app);
                 db = getFirestore(app);
                 
-                // Use anonymous sign-in
+                // Use anonymous sign-in to authenticate the user without a login form
                 await signInAnonymously(auth);
 
                 // Listen for auth state changes
@@ -68,8 +69,8 @@
                         userId = user.uid;
                         document.getElementById('user-id-display').textContent = `User ID: ${userId}`;
                         // Set up the entries collection path
-                        entriesCollection = collection(db, 'users', userId, 'entries');
-                        // Show content, hide auth form
+                        entriesCollection = collection(db, 'artifacts', appId, 'users', userId, 'entries');
+                        // Show content
                         contentContainer.style.display = 'block';
                         // Start listening for real-time data
                         setupRealtimeListener();
