@@ -12,17 +12,28 @@
             background-color: #f3f4f6;
         }
     </style>
-    
     <!-- Firebase SDKs -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, addDoc, onSnapshot, query, getDocs, deleteDoc, doc, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // Use the Firebase configuration provided by the Canvas environment
-        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        // Firebase configuration for GitHub Pages deployment
+        const githubFirebaseConfig = {
+            apiKey: "AIzaSyBN8xYYQ2d90po7W-3IizsR6WFf6tn5StM",
+            authDomain: "canada-tracker.firebaseapp.com",
+            projectId: "canada-tracker",
+            storageBucket: "canada-tracker.firebasestorage.app",
+            messagingSenderId: "898976695894",
+            appId: "1:898976695894:web:ad95d2dbc2536377f75df7",
+            measurementId: "G-VYB5RWRNJE"
+        };
+        const githubAppId = "canada-tracker";
+
+        // Check if Gemini environment variables exist and use them, otherwise use the hard-coded config
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : githubFirebaseConfig;
         const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const appId = typeof __app_id !== 'undefined' ? __app_id : githubAppId;
 
         // Global variables for Firebase
         let db;
