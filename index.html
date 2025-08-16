@@ -16,7 +16,7 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, addDoc, onSnapshot, query, getDocs, deleteDoc, doc, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, collection, addDoc, onSnapshot, query, where, getDocs, deleteDoc, doc, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // Firebase configuration for GitHub Pages deployment
         const githubFirebaseConfig = {
@@ -154,6 +154,21 @@
                 };
 
                 try {
+                    // Check for duplicate entry before adding
+                    const q = query(entriesCollection,
+                        where("name", "==", newEntry.name),
+                        where("fromDate", "==", newEntry.fromDate),
+                        where("toDate", "==", newEntry.toDate)
+                    );
+                    const querySnapshot = await getDocs(q);
+
+                    if (!querySnapshot.empty) {
+                        // A duplicate exists, show an error and return
+                        showMessage('This entry already exists.', 'error');
+                        return;
+                    }
+
+                    // No duplicate found, proceed to add the new entry
                     await addDoc(entriesCollection, newEntry);
                     showMessage('Entry added successfully!');
 
@@ -161,7 +176,7 @@
                     document.getElementById('from-date').value = '';
                     document.getElementById('to-date').value = '';
                 } catch (e) {
-                    console.error("Error adding document: ", e);
+                    console.error("Error adding document or checking for duplicates: ", e);
                     showMessage('Error adding entry. Please try again.', 'error');
                 }
             });
@@ -256,8 +271,7 @@
                         <input type="date" id="from-date" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
                     </div>
                     <div class="flex-1">
-                        <label for="to-date" class="block text-sm font-medium text-gray-700">To Date</label>
-                        <input type="date" id="to-date" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+                        <label for="to-date" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
                     </div>
                 </div>
 
