@@ -33,8 +33,8 @@
     <!-- Firebase SDKs -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, onSnapshot, query, writeBatch, doc, deleteDoc, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, onSnapshot, query, getDocs, deleteDoc, doc, writeBatch, setDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // Firebase configuration for GitHub Pages deployment
         const githubFirebaseConfig = {
@@ -50,11 +50,13 @@
 
         // Check if Gemini environment variables exist and use them, otherwise use the hard-coded config
         const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : githubFirebaseConfig;
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
         const appId = typeof __app_id !== 'undefined' ? __app_id : githubAppId;
 
         // Global variables for Firebase
         let db;
         let auth;
+        let userId = null;
         let entriesCollection;
         let allEntries = []; // Cache all entries for the user
         let editingEntryId = null; // Stores the ID of the entry currently being edited
@@ -68,6 +70,7 @@
         const messageBox = document.getElementById('message-box');
         const loadingSpinner = document.getElementById('loading-spinner');
         const contentContainer = document.getElementById('content-container');
+        const userIdDisplay = document.getElementById('user-id-display');
 
         // Show a message to the user
         const showMessage = (message, type = 'info') => {
@@ -80,22 +83,33 @@
         };
 
         // Initialize Firebase
-        const initFirebase = async () => {
+        const initFirebase = async (targetUserId = null) => {
             try {
                 loadingSpinner.style.display = 'block';
+                contentContainer.style.display = 'none';
+                
                 const app = initializeApp(firebaseConfig);
                 auth = getAuth(app);
                 db = getFirestore(app);
                 
-                // Use anonymous sign-in to get a user ID for Firestore security rules
-                await signInAnonymously(auth);
+                // If a target userId is provided (from manual sync), we'll use a custom token.
+                // Otherwise, use the standard auth flow.
+                if (targetUserId) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                } else {
+                    await signInAnonymously(auth);
+                }
 
                 // Listen for auth state changes
                 onAuthStateChanged(auth, (user) => {
                     loadingSpinner.style.display = 'none';
                     if (user) {
-                        // Set up the public entries collection path
-                        entriesCollection = collection(db, 'artifacts', appId, 'public', 'data', 'entries');
+                        // Use the provided targetUserId if it exists, otherwise use the authenticated user's UID.
+                        userId = targetUserId || user.uid;
+                        userIdDisplay.textContent = `Your ID: ${userId}`;
+                        userIdDisplay.style.display = 'block';
+                        // Set up the entries collection path
+                        entriesCollection = collection(db, 'artifacts', appId, 'users', userId, 'entries');
                         // Show content
                         contentContainer.style.display = 'block';
                         // Start listening for real-time data
@@ -426,6 +440,16 @@
                 return null;
             }
         };
+        
+        // Helper function to update the entire app view based on a new userId
+        const refreshAppWithNewId = (newUserId) => {
+            userId = newUserId;
+            userIdDisplay.textContent = `Your ID: ${userId}`;
+            // Re-initialize Firestore with the new user ID
+            entriesCollection = collection(db, 'artifacts', appId, 'users', userId, 'entries');
+            setupRealtimeListener(); // This will automatically refresh the data
+            showMessage('Successfully synced to the provided ID.', 'info');
+        };
 
         document.addEventListener('DOMContentLoaded', () => {
             initFirebase();
@@ -436,6 +460,12 @@
             const cancelButton = document.getElementById('cancel-edit-button');
             const fromDateVoiceButton = document.getElementById('from-date-voice-btn');
             const toDateVoiceButton = document.getElementById('to-date-voice-btn');
+            const syncButton = document.getElementById('sync-button');
+            const syncModal = document.getElementById('sync-modal');
+            const syncIdInput = document.getElementById('sync-id-input');
+            const syncConfirmBtn = document.getElementById('sync-confirm-btn');
+            const syncCancelBtn = document.getElementById('sync-cancel-btn');
+
 
             // Add event listeners for the new voice input buttons
             fromDateVoiceButton.addEventListener('click', () => startVoiceInput('from-date'));
@@ -444,6 +474,28 @@
             // Listen for changes on the person name dropdown to re-render the view
             personSelect.addEventListener('change', renderEntries);
             cancelButton.addEventListener('click', disableEditMode);
+            
+            // Handle Sync button clicks
+            syncButton.addEventListener('click', () => {
+                syncModal.style.display = 'block';
+                syncIdInput.value = '';
+                syncIdInput.focus();
+            });
+
+            syncConfirmBtn.addEventListener('click', () => {
+                const newId = syncIdInput.value.trim();
+                if (newId) {
+                    refreshAppWithNewId(newId);
+                } else {
+                    showMessage('Please enter a valid ID to sync.', 'error');
+                }
+                syncModal.style.display = 'none';
+            });
+
+            syncCancelBtn.addEventListener('click', () => {
+                syncModal.style.display = 'none';
+            });
+
 
             // Handle form submission
             form.addEventListener('submit', async (event) => {
@@ -627,7 +679,7 @@
 
         <!-- User ID and loading indicator -->
         <div class="mb-4 text-center">
-            <p id="user-id-display" class="text-sm text-gray-500 hidden"></p>
+            <p id="user-id-display" class="text-sm font-mono text-gray-600 mb-2 p-2 bg-gray-100 rounded-lg shadow-inner" style="display:none;"></p>
         </div>
         <div id="loading-spinner" class="text-center" style="display:none;">
             <div class="animate-spin inline-block w-8 h-8 border-4 border-indigo-500 border-dotted rounded-full"></div>
@@ -660,6 +712,21 @@
                 <div class="mt-4 flex justify-end space-x-2">
                     <button id="delete-yes" class="px-4 py-2 bg-red-600 text-white text-base font-medium rounded-md shadow-sm hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500">Yes, Delete</button>
                     <button id="delete-no" class="px-4 py-2 bg-gray-200 text-gray-800 text-base font-medium rounded-md shadow-sm hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-400">Cancel</button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Sync Modal -->
+        <div id="sync-modal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full" style="display:none;">
+            <div class="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+                <h3 class="text-lg leading-6 font-medium text-gray-900">Sync Another Device</h3>
+                <div class="mt-2 px-7 py-3">
+                    <p class="text-sm text-gray-500">To sync your data, copy the ID from the other device and paste it here.</p>
+                    <input type="text" id="sync-id-input" placeholder="Enter ID from other device" class="mt-2 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+                </div>
+                <div class="mt-4 flex justify-end space-x-2">
+                    <button id="sync-confirm-btn" class="px-4 py-2 bg-indigo-600 text-white text-base font-medium rounded-md shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500">Sync</button>
+                    <button id="sync-cancel-btn" class="px-4 py-2 bg-gray-200 text-gray-800 text-base font-medium rounded-md shadow-sm hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-400">Cancel</button>
                 </div>
             </div>
         </div>
@@ -741,6 +808,11 @@
                     </button>
                 </div>
             </form>
+            
+            <!-- Sync Another Device button -->
+            <div class="mt-4 text-center">
+                <button id="sync-button" class="text-sm text-indigo-600 hover:text-indigo-800 transition duration-150 ease-in-out">Sync Another Device</button>
+            </div>
 
             <!-- Container for the list of entries -->
             <div id="entries-list-container" class="mt-8">
