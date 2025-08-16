@@ -34,7 +34,7 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, addDoc, onSnapshot, query, where, getDocs, deleteDoc, doc, writeBatch, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, collection, addDoc, onSnapshot, query, getDocs, deleteDoc, doc, writeBatch, setDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // Firebase configuration for GitHub Pages deployment
         const githubFirebaseConfig = {
@@ -63,6 +63,8 @@
 
         // Target for the progress bar
         const TARGET_DAYS = 1035;
+        // The security code required to clear all entries
+        const CLEAR_CODE = "517329";
 
         // Message and loading elements
         const messageBox = document.getElementById('message-box');
@@ -123,8 +125,12 @@
         const calculateTotalDays = (entries) => {
             const uniqueDays = new Set();
             entries.forEach(entry => {
+                // Ensure dates are valid before processing
                 const fromDate = new Date(entry.fromDate);
                 const toDate = new Date(entry.toDate);
+                if (fromDate > toDate) {
+                    return; // Skip invalid entries
+                }
                 let currentDate = new Date(fromDate);
                 while (currentDate <= toDate) {
                     uniqueDays.add(currentDate.toISOString().substring(0, 10));
@@ -146,8 +152,8 @@
             // Filter the cached entries based on the selected person
             const filteredEntries = allEntries.filter(entry => entry.name === selectedPerson);
 
-            // Sort filtered entries by timestamp to ensure consistent order
-            filteredEntries.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+            // Sort filtered entries by date to ensure consistent order
+            filteredEntries.sort((a, b) => new Date(a.fromDate) - new Date(b.fromDate));
 
             // Calculate totals for the selected person
             const totalDays = calculateTotalDays(filteredEntries);
@@ -173,7 +179,6 @@
             }
             
             progressBar.style.width = `${progressPercentage}%`;
-            // Set the class of the progress bar based on the calculated color
             progressBar.className = `h-2.5 rounded-full transition-all duration-500 ease-in-out ${progressBarColorClass}`;
             
             // Update the progress text
@@ -186,8 +191,6 @@
             const entriesByYearMonth = filteredEntries.reduce((acc, entry) => {
                 // Manually parse the date string to avoid timezone issues
                 const parts = entry.fromDate.split('-');
-                // Create a new Date object using local time components
-                // Note: Month is 0-indexed in JS Date object (e.g., 7 for August)
                 const localDate = new Date(parts[0], parts[1] - 1, parts[2]);
                 
                 const year = localDate.getFullYear();
@@ -220,7 +223,7 @@
                 yearContent.className = 'collapsible-content space-y-2 pl-4 border-l-2 border-gray-200';
                 entriesListEl.appendChild(yearContent);
 
-                const sortedMonths = Object.keys(entriesByYearMonth[year]);
+                const sortedMonths = Object.keys(entriesByYearMonth[year]).sort((a, b) => new Date(`1 ${a} ${year}`) - new Date(`1 ${b} ${year}`));
                 sortedMonths.forEach(month => {
                     const monthHeader = document.createElement('div');
                     monthHeader.className = 'collapsible-header flex items-center justify-between bg-gray-100 p-3 rounded-md shadow-sm mb-2 mt-2 ml-2';
@@ -239,9 +242,14 @@
                     monthContent.className = 'collapsible-content space-y-2 pl-4 border-l-2 border-gray-100';
                     yearContent.appendChild(monthContent);
 
-                    entriesByYearMonth[year][month].forEach((entry, index) => {
+                    entriesByYearMonth[year][month].forEach((entry) => {
                         const listItem = document.createElement('li');
-                        listItem.className = 'bg-white p-3 rounded-md shadow-sm border border-gray-200 text-gray-700 text-sm flex justify-between items-center';
+                        // Highlight invalid entries for easy deletion
+                        if (new Date(entry.fromDate) > new Date(entry.toDate)) {
+                            listItem.className = 'bg-red-50 p-3 rounded-md shadow-sm border border-red-200 text-red-700 text-sm flex justify-between items-center';
+                        } else {
+                            listItem.className = 'bg-white p-3 rounded-md shadow-sm border border-gray-200 text-gray-700 text-sm flex justify-between items-center';
+                        }
                         
                         const textSpan = document.createElement('span');
                         textSpan.textContent = `From ${entry.fromDate} to ${entry.toDate}`;
@@ -311,18 +319,29 @@
         const showDeleteConfirm = (entryId, entryName) => {
             const deleteConfirmModal = document.getElementById('delete-confirm-modal');
             const deleteMessage = document.getElementById('delete-message');
+            const deleteCodeInput = document.getElementById('delete-code-input');
             
-            deleteMessage.textContent = `Are you sure you want to delete this entry for ${entryName}?`;
+            deleteMessage.textContent = `Are you sure you want to delete the entry for ${entryName}? Please enter the security code to confirm.`;
+            deleteCodeInput.value = ''; // Clear input on open
             deleteConfirmModal.style.display = 'block';
+            deleteCodeInput.focus();
 
             document.getElementById('delete-yes').onclick = async () => {
-                deleteConfirmModal.style.display = 'none';
-                try {
-                    await deleteDoc(doc(entriesCollection, entryId));
-                    showMessage('Entry deleted successfully!');
-                } catch (e) {
-                    console.error("Error deleting document: ", e);
-                    showMessage('Error deleting entry. Please try again.', 'error');
+                const enteredCode = deleteCodeInput.value.trim();
+                if (enteredCode === CLEAR_CODE) {
+                    deleteConfirmModal.style.display = 'none';
+                    console.log(`Attempting to delete entry with ID: ${entryId}`);
+                    try {
+                        await deleteDoc(doc(entriesCollection, entryId));
+                        showMessage('Entry deleted successfully!');
+                        console.log(`Deletion successful for ID: ${entryId}`);
+                    } catch (e) {
+                        console.error("Error deleting document: ", e);
+                        showMessage('Error deleting entry. Please try again.', 'error');
+                    }
+                } else {
+                    deleteConfirmModal.style.display = 'none';
+                    showMessage('Incorrect code. Entry was not deleted.', 'error');
                 }
             };
 
@@ -449,9 +468,9 @@
                 }
 
                 // New validations: From date less than To date
-                const fromDateObj = new Date(fromDate);
-                const toDateObj = new Date(toDate);
-                if (fromDateObj > toDateObj) {
+                const fromDateInt = parseInt(fromDate.replace(/-/g, ''), 10);
+                const toDateInt = parseInt(toDate.replace(/-/g, ''), 10);
+                if (fromDateInt > toDateInt) {
                     showMessage('The "From" date cannot be after the "To" date.', 'error');
                     return;
                 }
@@ -459,6 +478,8 @@
                 // New validation: No future dates allowed
                 const today = new Date();
                 today.setHours(0, 0, 0, 0); // Normalize to the start of the day
+                const fromDateObj = new Date(fromDate);
+                const toDateObj = new Date(toDate);
                 if (fromDateObj > today || toDateObj > today) {
                     showMessage('Future dates are not allowed.', 'error');
                     return;
@@ -495,80 +516,72 @@
                     }
                 }
 
-                // Proceed with adding or updating the entry
+                // --- LOGIC: SPLIT ENTRIES BY MONTH ---
+                const batch = writeBatch(db);
+                console.log("Starting batch write process...");
+                console.log(`Original From Date: ${fromDate}, Original To Date: ${toDate}`);
+
+
+                // If editing, delete the old entry first
                 if (editingEntryId) {
-                    try {
-                        // First, delete the old entry
-                        const oldEntryRef = doc(db, entriesCollection.path, editingEntryId);
-                        await deleteDoc(oldEntryRef);
-                        
-                        // Then, add the new entry(s)
-                        await addSplitEntries(personName, fromDate, toDate);
-
-                        showMessage('Entry updated successfully!');
-                        disableEditMode(); // Reset form after successful update
-                    } catch (e) {
-                        console.error("Error updating document: ", e);
-                        showMessage('Error updating entry. Please try again.', 'error');
-                    }
-                } else {
-                    // Add new entry
-                    await addSplitEntries(personName, fromDate, toDate);
+                    const oldEntryRef = doc(entriesCollection, editingEntryId);
+                    batch.delete(oldEntryRef);
+                    console.log(`Editing mode: Deleting old entry with ID: ${editingEntryId}`);
                 }
-            });
+                
+                // Fix the timezone issue by manually constructing dates
+                const fromParts = fromDate.split('-');
+                let currentFromDate = new Date(fromParts[0], fromParts[1] - 1, fromParts[2]);
+                const toParts = toDate.split('-');
+                const endToDate = new Date(toParts[0], toParts[1] - 1, toParts[2]);
 
-            // Function to handle adding entries, with logic to split ranges across months
-            const addSplitEntries = async (personName, fromDate, toDate) => {
-                const start = new Date(fromDate);
-                const end = new Date(toDate);
+
+                // Loop to split the date range into monthly chunks
+                while (currentFromDate <= endToDate) {
+                    const year = currentFromDate.getFullYear();
+                    const month = currentFromDate.getMonth();
+                    const lastDayOfMonth = new Date(year, month + 1, 0);
+
+                    // Determine the 'to' date for the current chunk
+                    let currentToDate = new Date(lastDayOfMonth);
+                    if (currentToDate > endToDate) {
+                        currentToDate = new Date(endToDate);
+                    }
+                    
+                    // Format dates for the entry
+                    const entryFromDate = currentFromDate.toISOString().substring(0, 10);
+                    const entryToDate = currentToDate.toISOString().substring(0, 10);
+
+                    // Create a new entry object for the current chunk
+                    const newEntryData = {
+                        name: personName,
+                        fromDate: entryFromDate,
+                        toDate: entryToDate,
+                        timestamp: new Date().toISOString()
+                    };
+
+                    console.log(`Adding entry chunk: From ${newEntryData.fromDate} to ${newEntryData.toDate}`);
+
+                    // Add the entry to the batch
+                    const newDocRef = doc(collection(db, 'artifacts', appId, 'users', userId, 'entries'));
+                    batch.set(newDocRef, newEntryData);
+
+                    // Move to the first day of the next month
+                    currentFromDate = new Date(currentToDate);
+                    currentFromDate.setDate(currentFromDate.getDate() + 1);
+                }
 
                 try {
-                    // Check if the range spans multiple months
-                    if (start.getMonth() !== end.getMonth() || start.getFullYear() !== end.getFullYear()) {
-                        // It spans multiple months, so we need to split it
-                        const firstMonthEnd = new Date(start.getFullYear(), start.getMonth() + 1, 0);
-                        const secondMonthStart = new Date(end.getFullYear(), end.getMonth(), 1);
-                        
-                        // Create first entry for the first month
-                        const firstEntry = {
-                            name: personName,
-                            fromDate: fromDate,
-                            toDate: firstMonthEnd.toISOString().substring(0, 10),
-                            timestamp: new Date().toISOString()
-                        };
-                        await addDoc(entriesCollection, firstEntry);
-
-                        // Create second entry for the second month
-                        const secondEntry = {
-                            name: personName,
-                            fromDate: secondMonthStart.toISOString().substring(0, 10),
-                            toDate: toDate,
-                            timestamp: new Date().toISOString()
-                        };
-                        await addDoc(entriesCollection, secondEntry);
-                        
-                        showMessage('Entry added and split across months successfully!');
-
-                    } else {
-                        // It's all in one month, add a single entry
-                        const newEntry = {
-                            name: personName,
-                            fromDate: fromDate,
-                            toDate: toDate,
-                            timestamp: new Date().toISOString()
-                        };
-                        await addDoc(entriesCollection, newEntry);
-                        showMessage('Entry added successfully!');
-                    }
-                    // Reset the date inputs
-                    document.getElementById('from-date').value = '';
-                    document.getElementById('to-date').value = '';
-
+                    // Commit the entire batch of operations
+                    await batch.commit();
+                    showMessage(editingEntryId ? 'Entry updated successfully!' : 'Entries added successfully!');
+                    console.log("Batch commit successful.");
+                    disableEditMode(); // Reset form after successful update or add
                 } catch (e) {
-                    console.error("Error adding document: ", e);
-                    showMessage('Error adding entry. Please try again.', 'error');
+                    console.error("Error saving documents: ", e);
+                    showMessage('Error saving entries. Please try again.', 'error');
                 }
-            };
+            });
 
 
             // Handle the clear button click
@@ -582,23 +595,36 @@
                 const confirmModal = document.getElementById('confirm-modal');
                 confirmModal.style.display = 'block';
 
+                // Get the input element and focus on it when the modal opens
+                const clearCodeInput = document.getElementById('clear-code-input');
+                clearCodeInput.value = '';
+                clearCodeInput.focus();
+
                 document.getElementById('confirm-yes').onclick = async () => {
-                    confirmModal.style.display = 'none';
-                    try {
-                        const batch = writeBatch(db);
-                        entriesList.forEach((doc) => {
-                            batch.delete(doc.ref);
-                        });
-                        await batch.commit();
-                        showMessage('All entries cleared successfully!');
-                    } catch (e) {
-                        console.error("Error clearing documents: ", e);
-                        showMessage('Error clearing entries. Please try again.', 'error');
+                    const enteredCode = clearCodeInput.value.trim();
+                    if (enteredCode === CLEAR_CODE) {
+                        confirmModal.style.display = 'none';
+                        try {
+                            const batch = writeBatch(db);
+                            entriesList.forEach((doc) => {
+                                batch.delete(doc.ref);
+                            });
+                            await batch.commit();
+                            showMessage('All entries cleared successfully!');
+                        } catch (e) {
+                            console.error("Error clearing documents: ", e);
+                            showMessage('Error clearing entries. Please try again.', 'error');
+                        }
+                    } else {
+                        confirmModal.style.display = 'none';
+                        showMessage('Incorrect code. Entries were not cleared.', 'error');
+                        clearCodeInput.value = ''; // Clear the input for another try
                     }
                 };
 
                 document.getElementById('confirm-no').onclick = () => {
                     confirmModal.style.display = 'none';
+                    clearCodeInput.value = ''; // Clear input on cancel
                 };
             });
         });
@@ -622,7 +648,8 @@
             <div class="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
                 <h3 class="text-lg leading-6 font-medium text-gray-900">Confirm Action</h3>
                 <div class="mt-2 px-7 py-3">
-                    <p class="text-sm text-gray-500">Are you sure you want to clear all entries? This action cannot be undone.</p>
+                    <p class="text-sm text-gray-500">To clear all entries, please enter the security code:</p>
+                    <input type="text" id="clear-code-input" placeholder="Enter code" class="mt-2 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
                 </div>
                 <div class="mt-4 flex justify-end space-x-2">
                     <button id="confirm-yes" class="px-4 py-2 bg-red-600 text-white text-base font-medium rounded-md shadow-sm hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500">Yes</button>
@@ -631,12 +658,13 @@
             </div>
         </div>
 
-        <!-- Delete Confirmation Modal -->
+        <!-- Delete Confirmation Modal (Now with code input) -->
         <div id="delete-confirm-modal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full" style="display:none;">
             <div class="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
                 <h3 class="text-lg leading-6 font-medium text-gray-900">Confirm Deletion</h3>
                 <div class="mt-2 px-7 py-3">
-                    <p id="delete-message" class="text-sm text-gray-500"></p>
+                    <p id="delete-message" class="text-sm text-gray-500 mb-2"></p>
+                    <input type="text" id="delete-code-input" placeholder="Enter code" class="block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
                 </div>
                 <div class="mt-4 flex justify-end space-x-2">
                     <button id="delete-yes" class="px-4 py-2 bg-red-600 text-white text-base font-medium rounded-md shadow-sm hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500">Yes, Delete</button>
